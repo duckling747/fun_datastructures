@@ -27,7 +27,7 @@ public:
 };
 
 Bitvector::Bitvector(const size_t s)
-    : data(new uint64_t[s/64+1]), _size(0), end(data+(s/64)+1), top(0)
+    : data(new uint64_t[s/64 + (s%64 != 0)]), _size(0), end(data + (s/64 + (s%64 != 0))), top(0)
 {}
 
 Bitvector::~Bitvector() {

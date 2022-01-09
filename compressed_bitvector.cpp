@@ -1,13 +1,14 @@
-#include <bit>
+#ifndef COMPRESSED_BV
+#define COMPRESSED_BV
 #include <cstdint>
 #include <iostream>
-#include <bitset>
 #include <cassert>
 #include <queue>
 #include <vector>
 #include <map>
 #include <stack>
 #include "bitvector.cpp"
+#include "partial_sums.cpp"
 
 
 struct Node {
@@ -26,21 +27,20 @@ struct Node {
 class Compressed_bitvector final {
 private:
     std::vector<Bitvector*> data;
-    // TODO: exchange vector with the prefix sums data structure //
-    std::vector<uint32_t> sums;
+    Partial_sums *const sums;
 public:
     Compressed_bitvector (const uint64_t *const arr, const size_t len, const uint8_t macroblock_bits);
     ~Compressed_bitvector ();
-    uint64_t rank (const uint64_t i);
-    uint64_t select (const uint64_t j);
+    uint64_t rank (const uint64_t i) const;
+    uint64_t select (const uint64_t j) const;
     void push_back (const uint64_t bit);
-    void print (void);
-    uint64_t size (void);
-    bool access (const uint64_t i);
+    void print (void) const;
+    uint64_t size (void) const;
+    bool access (const uint64_t i) const;
 };
 
 Compressed_bitvector::Compressed_bitvector (const uint64_t *const arr, const size_t len, const uint8_t macroblock_bits)
-    : sums(), data{new Bitvector(macroblock_bits)}
+    : sums(new Partial_sums(len)), data{new Bitvector(macroblock_bits)}
 {
     auto *const freqs = new std::map<uint64_t, uint64_t>;
     for (size_t i = 0; i < len; i++) {
@@ -79,9 +79,10 @@ Compressed_bitvector::Compressed_bitvector (const uint64_t *const arr, const siz
     delete q;
     delete cq;
     std::cout << "coding...\n";
-    sums.push_back(0);
+    uint64_t sum = 0;
+    sums->push_back(sum);
     for (size_t i = 0; i < len; i++) {
-        sums.push_back(sums.back() + (*codes)[arr[i]].size());
+        sums->push_back(sum += (*codes)[arr[i]].size());
         for (const char &c : (*codes)[arr[i]]) {
             if (data.back()->size() >= macroblock_bits) {
                 data.push_back(new Bitvector(macroblock_bits));
@@ -92,21 +93,36 @@ Compressed_bitvector::Compressed_bitvector (const uint64_t *const arr, const siz
         std::cout << '\n';
     }
     delete codes;
-    for (const auto &a : data) {
-        a->print();
-    }
-    for (const auto & a : sums) {
-        std::cout << a << ' ';
-    }
-    std::cout << '\n';
 }
 
 Compressed_bitvector::~Compressed_bitvector () {
     for (const auto &e : data) delete e;
+    delete sums;
 }
 
-int main (void) {
-    uint64_t asdf [21] {1,2,3,4,5,6,7,8,9,9,9,9,9,8, 19,29, 9, 1, 1,2,2};
-    Compressed_bitvector c (asdf, 21, 128);
-    
+void Compressed_bitvector::print (void) const {
+    std::cout << "data:\n";
+    for (const auto &a : data) {
+        a->print();
+    }
+    std::cout << "sums:\n";
+    sums->print();
 }
+
+
+#include <random>
+static std::random_device rd;
+static std::default_random_engine gen(rd());
+static std::uniform_int_distribution<char> dis ('a', 'z');
+int main (void) {
+    
+    uint64_t len = 200000;
+    uint64_t arr[len] = {};
+    for (uint64_t i = 0; i < len; i++) {
+        arr[i] = dis(gen);
+    }
+    const Compressed_bitvector c (arr, len, 64);
+    c.print();
+}
+
+#endif
