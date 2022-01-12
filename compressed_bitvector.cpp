@@ -3,126 +3,138 @@
 #include <cstdint>
 #include <iostream>
 #include <cassert>
-#include <queue>
 #include <vector>
-#include <map>
-#include <stack>
+#include <bit>
+#include <sstream>
+#include <memory>
 #include "bitvector.cpp"
 #include "partial_sums.cpp"
+#include "compression.cpp"
+#include "golomb_rice_vector.cpp"
 
+template <class T>
+class Compressed_bitvector;
 
-struct Node {
-    uint64_t data;
-    uint64_t freq;
-    Node *left;
-    Node *right;
-    Node (uint64_t data, uint64_t freq)
-        : data(data), freq(freq), left(nullptr), right(nullptr)
-    {}
-    Node (uint64_t freq, Node *left, Node *right)
-        : freq(freq), left(left), right(right)
-    {}
-};
+template <class T>
+std::ostream& operator<< (std::ostream& os, const Compressed_bitvector<T> &b);
 
+template <class T>
 class Compressed_bitvector final {
 private:
-    std::vector<Bitvector*> data;
-    Partial_sums *const sums;
+    static constexpr uint8_t maximum_len = sizeof(T) << 3; // (in bits)
+    std::unique_ptr<Bitvector> data;
+    std::unique_ptr<Partial_sums> sums;
+    std::unique_ptr<GolombRiceVector<T>> grv;
+    const size_t _size;
 public:
-    Compressed_bitvector (const uint64_t *const arr, const size_t len, const uint8_t macroblock_bits);
-    ~Compressed_bitvector ();
-    uint64_t rank (const uint64_t i) const;
-    uint64_t select (const uint64_t j) const;
-    void push_back (const uint64_t bit);
-    void print (void) const;
-    uint64_t size (void) const;
-    bool access (const uint64_t i) const;
+    Compressed_bitvector (std::vector<T> &msg);
+    friend std::ostream& operator<< <>(std::ostream &os, const Compressed_bitvector &b);
+    const T operator[] (const size_t i);
+    const size_t size (void) const;
+    const size_t data_bits_taken (void) const;
 };
 
-Compressed_bitvector::Compressed_bitvector (const uint64_t *const arr, const size_t len, const uint8_t macroblock_bits)
-    : sums(new Partial_sums(len)), data{new Bitvector(macroblock_bits)}
+template <class T>
+Compressed_bitvector<T>::Compressed_bitvector (std::vector<T> &msg)
+    : _size(msg.size())
 {
-    auto *const freqs = new std::map<uint64_t, uint64_t>;
-    for (size_t i = 0; i < len; i++) {
-        (*freqs)[arr[i]]++;
+    static_assert(std::is_unsigned<T>::value, "Unsigned integral required.");
+    std::vector<T> order;
+    Compress::encode<T>( msg, order );
+    grv = std::make_unique<GolombRiceVector<T>>(order);
+    for (int i = 0; i < order.size(); i++) {
+        assert (order[i] == grv->get(i));
     }
-    auto *const q = new std::priority_queue<Node*, std::vector<Node*>,
-        decltype([](const Node *const a, const Node *const b){
-            return a->freq >= b->freq;
-        })
-    >;
-    for (const auto &a : *freqs) {
-        q->push(new Node(a.first, a.second));
-    }
-    delete freqs;
-    while (q->size() > 1) {
-        Node *const a = q->top();
-        q->pop();
-        Node *const b = q->top();
-        q->pop();
-        q->push(new Node(a->freq + b->freq, a, b));
-    }
-    auto *const codes = new std::map<uint64_t, std::string>;
-    auto *const cq = new std::stack<std::pair<Node*, std::string>>;
-    cq->push({ q->top(), "" });
-    while (!cq->empty()) {
-        const auto next = cq->top();
-        cq->pop();
-        if (next.first->left == nullptr) {
-            (*codes)[next.first->data] = next.second;
-            continue;
+    std::cout << "grv:\n";
+    grv->print();
+    data = std::make_unique<Bitvector>();
+    sums = std::make_unique<Partial_sums>();
+    for (const auto code : msg) {
+        uint8_t count = maximum_len-std::countl_zero(code);
+        if (count == 0) count = 1;
+        for (uint8_t i = 0; i < count; i++) {
+            data->push_back((code >> i) & 1U);
         }
-        cq->push({ next.first->left, next.second+char(0) });
-        cq->push({ next.first->right, next.second+char(1) });
-        delete next.first;
     }
-    delete q;
-    delete cq;
-    std::cout << "coding...\n";
-    uint64_t sum = 0;
-    sums->push_back(sum);
-    for (size_t i = 0; i < len; i++) {
-        sums->push_back(sum += (*codes)[arr[i]].size());
-        for (const char &c : (*codes)[arr[i]]) {
-            if (data.back()->size() >= macroblock_bits) {
-                data.push_back(new Bitvector(macroblock_bits));
-            }
-            data.back()->push_back( c );
-            std::cout << int(c);
-        }
-        std::cout << '\n';
-    }
-    delete codes;
-}
-
-Compressed_bitvector::~Compressed_bitvector () {
-    for (const auto &e : data) delete e;
-    delete sums;
-}
-
-void Compressed_bitvector::print (void) const {
     std::cout << "data:\n";
-    for (const auto &a : data) {
-        a->print();
+    data->print();
+    uint64_t len = 0;
+    sums->push_back(len);
+    for (const auto code : msg) {
+        const uint8_t count = maximum_len-std::countl_zero(code);
+        sums->push_back(len += count == 0 ? 1 : count);
     }
     std::cout << "sums:\n";
     sums->print();
 }
 
+template <class T>
+const T Compressed_bitvector<T>::operator[] (const size_t i) {
+    assert ( i < _size );
+    size_t c = 0;
+    const auto s = sums->sum(i);
+    const auto e = sums->sum(i+1);
+    /*
+    std::cout << "sums->sum(i): " << s << '\n'
+                << "sums->sum(i+1): " << e << '\n';
+    */
+    for (size_t j = s, k = 0; j < e; j++, k++) {
+        c |= data->access(j) << k;
+    }
+    return grv->get(c);
+}
+
+template <class T>
+const size_t Compressed_bitvector<T>::size (void) const {
+    return _size;
+}
+
+template <class T>
+std::ostream& operator<< (std::ostream &os, const Compressed_bitvector<T> &b) {
+    std::stringstream ss;
+    ss << "data: ";
+    for (size_t i = 0; i < b.data->size(); i++) ss << b.data->access(i);
+    ss << "\nsums: ";
+    for (size_t i = 0; i < b.sums->size(); i++) ss << *(b.sums);
+    return os << ss.str();
+}
+
+template <class T>
+const size_t Compressed_bitvector<T>::data_bits_taken (void) const {
+    uint64_t bits = ((data->size() + 63) >> 6) << 6;
+    bits += grv->data_bits_taken();
+    bits += sums->data_bits_taken();
+    return bits;
+}
 
 #include <random>
 static std::random_device rd;
 static std::default_random_engine gen(rd());
-static std::uniform_int_distribution<char> dis ('a', 'z');
+static std::uniform_int_distribution<unsigned char> dis ('a', 'z');
 int main (void) {
-    
-    uint64_t len = 200000;
-    uint64_t arr[len] = {};
-    for (uint64_t i = 0; i < len; i++) {
-        arr[i] = dis(gen);
+    std::vector<unsigned char> msg;
+    for (int i = 0; i < 100000; i++) {
+        msg.push_back(dis(gen));
     }
-    const Compressed_bitvector c (arr, len, 64);
-    c.print();
+    for ( auto a : msg ) std::cout << a;
+    std::cout << '\n';
+    
+    std::vector<unsigned char> cp (msg.begin(), msg.end());
+    Compressed_bitvector<unsigned char> b (cp);
+    assert (b.size() == msg.size());
+    for (uint64_t i = 0; i < b.size(); i++) {
+        auto f = b[i];
+        auto g = msg[i];
+        std::cout << f << "==" << g << '\n';
+        assert (f == g);
+    }
+    
+    std::cout << "bits: " << b.data_bits_taken() << '\n';
+    
+    std::cout << "normal: ";
+    uint64_t asdf = 0;
+    for (auto a : msg) asdf += sizeof(a)*8;
+    std::cout << asdf << '\n';
 }
 
 #endif

@@ -6,35 +6,31 @@
 #include <bit>
 #include <bitset>
 #include <cassert>
+#include <vector>
+#include <x86intrin.h>
 
 class Bitvector final {
 private:
-          uint64_t *const data;
-    const uint64_t *const end;
-          uint64_t top;
-          uint64_t _size;
+    std::vector<uint64_t> data;
+    uint64_t _size;
 
 public:
-    Bitvector (const size_t s);
-    ~Bitvector ();
-    uint64_t rank (const uint64_t i);
-    uint64_t select (const uint64_t j);
+    Bitvector ();
+    uint64_t rank (const uint64_t i) const;
+    uint64_t select (const uint64_t j) const;
     void push_back (const uint64_t bit);
-    void print (void);
-    uint64_t size (void);
-    bool access (const uint64_t i);
+    void print (void) const;
+    uint64_t size (void) const;
+    bool access (const uint64_t i) const;
+    uint64_t leading_ones (const uint64_t i) const;
 
 };
 
-Bitvector::Bitvector(const size_t s)
-    : data(new uint64_t[s/64 + (s%64 != 0)]), _size(0), end(data + (s/64 + (s%64 != 0))), top(0)
+Bitvector::Bitvector()
+    : data(), _size(0)
 {}
 
-Bitvector::~Bitvector() {
-    delete[] data;
-}
-
-uint64_t Bitvector::rank (const uint64_t i) {
+uint64_t Bitvector::rank (const uint64_t i) const {
     assert (i <= _size);
     
     uint64_t count = 0;
@@ -45,33 +41,31 @@ uint64_t Bitvector::rank (const uint64_t i) {
     return count + std::popcount( data[index] & ((1ULL << (i%64)) - 1) );
 }
 
-uint64_t Bitvector::select (const uint64_t j) {
+uint64_t Bitvector::select (const uint64_t j) const {
     assert (j < _size);
-    
     uint64_t count = 0;
-    uint64_t index = 0;
-    auto it = data;
-    for (; it != end && count + std::popcount(*it) <= j+1 && index + 64 < _size; it++) {
-        count += std::popcount(*it);
-        index += 64;
+    size_t index = 0;
+    // std::cout << "finding: " << j+1 << '\n';
+    auto pc = std::popcount(data[index]);
+    while (index+1 < data.size() && count + pc <= j) {
+        count += pc;
+        pc = std::popcount(data[++index]);
     }
-    uint8_t shift;
-    for (shift = 0; shift <= _size%64 && count != j+1; shift++) {
-        count += (( *it >> shift ) & 1U);
-    }
-    return index + (shift ? shift-1 : shift);
+    // std::cout << "index: " << index << "\n";
+    return (index << 6) + std::countr_zero(_pdep_u64(1ULL << (j-count), data[index]));
 }
 
 void Bitvector::push_back (const uint64_t bit) {
     if (_size % 64 == 0) {
-        data[top++] = 0;
+        data.push_back(0);
+        data.shrink_to_fit();
     }
-    data[top-1] = data[top-1] | (bit << (_size%64));
+    data.back() = data.back() | (bit << (_size%64));
     _size++;
 }
 
-void Bitvector::print (void) {
-    for (auto it = data; it != end; it++) {
+void Bitvector::print (void) const {
+    for (auto it = data.cbegin(); it != data.cend(); it++) {
         for (int8_t b = 56; b >= 0; b-=8) {
             std::cout << std::bitset<8>(*it >> b) << ' ';
         }
@@ -79,13 +73,18 @@ void Bitvector::print (void) {
     }
 }
 
-uint64_t Bitvector::size (void) {
+uint64_t Bitvector::size (void) const {
     return _size;
 }
 
-bool Bitvector::access (const uint64_t i) {
+bool Bitvector::access (const uint64_t i) const {
     assert (i < _size);
     return (data[i/64] >> (i%64)) & 1U;
+}
+
+uint64_t Bitvector::leading_ones (const uint64_t i) const {
+    assert (i < _size);
+    return std::countr_one(data[i/64] >> (i%64));
 }
 
 #endif
