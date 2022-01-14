@@ -10,7 +10,7 @@
 #include "bitvector.cpp"
 #include "partial_sums.cpp"
 #include "compression.cpp"
-#include "golomb_rice_vector.cpp"
+#include "vbyte_vector.cpp"
 
 template <class T>
 class Compressed_bitvector;
@@ -24,12 +24,12 @@ private:
     static constexpr uint8_t maximum_len = sizeof(T) << 3; // (in bits)
     std::unique_ptr<Bitvector> data;
     std::unique_ptr<Partial_sums> sums;
-    std::unique_ptr<GolombRiceVector<T>> grv;
+    std::unique_ptr<VByteVector<T>> grv;
     const size_t _size;
 public:
     Compressed_bitvector (std::vector<T> &msg);
     friend std::ostream& operator<< <>(std::ostream &os, const Compressed_bitvector &b);
-    const T operator[] (const size_t i);
+    const T operator[] (const size_t i) const;
     const size_t size (void) const;
     const size_t data_bits_taken (void) const;
 };
@@ -41,12 +41,11 @@ Compressed_bitvector<T>::Compressed_bitvector (std::vector<T> &msg)
     static_assert(std::is_unsigned<T>::value, "Unsigned integral required.");
     std::vector<T> order;
     Compress::encode<T>( msg, order );
-    grv = std::make_unique<GolombRiceVector<T>>(order);
+    grv = std::make_unique<VByteVector<T>>(order);
     for (int i = 0; i < order.size(); i++) {
+        //std::cout << order[i] << "==" << grv->get(i) << '\n';
         assert (order[i] == grv->get(i));
     }
-    std::cout << "grv:\n";
-    grv->print();
     data = std::make_unique<Bitvector>();
     sums = std::make_unique<Partial_sums>();
     for (const auto code : msg) {
@@ -56,20 +55,16 @@ Compressed_bitvector<T>::Compressed_bitvector (std::vector<T> &msg)
             data->push_back((code >> i) & 1U);
         }
     }
-    std::cout << "data:\n";
-    data->print();
     uint64_t len = 0;
     sums->push_back(len);
     for (const auto code : msg) {
         const uint8_t count = maximum_len-std::countl_zero(code);
         sums->push_back(len += count == 0 ? 1 : count);
     }
-    std::cout << "sums:\n";
-    sums->print();
 }
 
 template <class T>
-const T Compressed_bitvector<T>::operator[] (const size_t i) {
+const T Compressed_bitvector<T>::operator[] (const size_t i) const {
     assert ( i < _size );
     size_t c = 0;
     const auto s = sums->sum(i);
@@ -101,40 +96,9 @@ std::ostream& operator<< (std::ostream &os, const Compressed_bitvector<T> &b) {
 
 template <class T>
 const size_t Compressed_bitvector<T>::data_bits_taken (void) const {
-    uint64_t bits = ((data->size() + 63) >> 6) << 6;
-    bits += grv->data_bits_taken();
-    bits += sums->data_bits_taken();
-    return bits;
-}
-
-#include <random>
-static std::random_device rd;
-static std::default_random_engine gen(rd());
-static std::uniform_int_distribution<unsigned char> dis ('a', 'z');
-int main (void) {
-    std::vector<unsigned char> msg;
-    for (int i = 0; i < 100000; i++) {
-        msg.push_back(dis(gen));
-    }
-    for ( auto a : msg ) std::cout << a;
-    std::cout << '\n';
-    
-    std::vector<unsigned char> cp (msg.begin(), msg.end());
-    Compressed_bitvector<unsigned char> b (cp);
-    assert (b.size() == msg.size());
-    for (uint64_t i = 0; i < b.size(); i++) {
-        auto f = b[i];
-        auto g = msg[i];
-        std::cout << f << "==" << g << '\n';
-        assert (f == g);
-    }
-    
-    std::cout << "bits: " << b.data_bits_taken() << '\n';
-    
-    std::cout << "normal: ";
-    uint64_t asdf = 0;
-    for (auto a : msg) asdf += sizeof(a)*8;
-    std::cout << asdf << '\n';
+    return (((data->size() + 63) >> 6) << 6)
+        + grv->data_bits_taken()
+        + sums->data_bits_taken();
 }
 
 #endif

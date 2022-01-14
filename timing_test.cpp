@@ -23,7 +23,7 @@ long measure_time (const std::function<size_t ()> &f) {
 }
 
 int main (void) {
-    Bitvector b (size);
+    Bitvector b;
     std::vector<bool> v (size);
     std::bitset<size> s;
     

@@ -22,7 +22,7 @@ private:
     T decode (const uint64_t &c) const;
 
 public:
-    GolombRiceVector (const std::vector<T> &s, const uint8_t k = 10);
+    GolombRiceVector (const std::vector<T> &s, const uint8_t k = 8);
     T get (const size_t i) const;
     int64_t index_of (const T item) const;
     const size_t size (void) const;
